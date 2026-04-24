@@ -1,0 +1,205 @@
+---
+title: "Laboratorio 8 – Máquinas Vectoriales de Soporte (SVM)"
+author: "Anggelie Velásquez, Anthony Lou, Isabella Obando"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r librerias}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(e1071)      # SVM / SVR
+library(kernlab)    # ksvm con tuning
+library(corrplot)
+library(tidyr)
+```
+
+---
+
+## Preparación del entorno de datos
+
+El pipeline de preprocesamiento es idéntico al utilizado en los laboratorios anteriores,
+garantizando que los conjuntos de entrenamiento y prueba sean exactamente los mismos.
+
+```{r carga}
+load("listings.RData")
+
+listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+listings <- listings %>% filter(!is.na(price), price > 0, price < 1000)
+
+vars_modelo <- c("price", "accommodates", "bedrooms", "bathrooms",
+                 "beds", "minimum_nights", "number_of_reviews",
+                 "review_scores_rating", "availability_365")
+
+model_df <- listings %>%
+  select(all_of(vars_modelo)) %>%
+  mutate(across(everything(), ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+cat("Dimensiones:", nrow(model_df), "x", ncol(model_df), "\n")
+```
+
+```{r categorias}
+q1 <- quantile(model_df$price, 0.25)
+q3 <- quantile(model_df$price, 0.75)
+
+model_df <- model_df %>%
+  mutate(
+    precio_categoria = factor(
+      case_when(
+        price <= q1 ~ "Economica",
+        price <= q3 ~ "Intermedia",
+        TRUE        ~ "Cara"
+      ),
+      levels = c("Economica", "Intermedia", "Cara")
+    )
+  )
+
+cat("Cortes — Q1:", q1, "| Q3:", q3, "\n")
+print(table(model_df$precio_categoria))
+```
+
+```{r split}
+set.seed(42)
+
+n         <- nrow(model_df)
+train_idx <- sample(seq_len(n), size = floor(0.70 * n))
+
+train_df <- model_df[ train_idx, ]
+test_df  <- model_df[-train_idx, ]
+
+cat("Train:", nrow(train_df), "filas | Test:", nrow(test_df), "filas\n")
+cat("Distribución train:\n"); print(prop.table(table(train_df$precio_categoria)))
+cat("Distribución test:\n");  print(prop.table(table(test_df$precio_categoria)))
+```
+
+---
+
+## Exploración y transformaciones para SVM
+
+SVM es sensible a la escala de las variables. A continuación se analiza la
+distribución de las predictoras y se aplica normalización.
+
+```{r exploracion_escala}
+vars_pred <- c("accommodates", "bedrooms", "bathrooms", "beds",
+               "minimum_nights", "number_of_reviews",
+               "review_scores_rating", "availability_365")
+
+# Resumen de rango antes de escalar
+rango_df <- data.frame(
+  Variable = vars_pred,
+  Min      = sapply(train_df[, vars_pred], min),
+  Max      = sapply(train_df[, vars_pred], max),
+  Media    = round(sapply(train_df[, vars_pred], mean), 2),
+  SD       = round(sapply(train_df[, vars_pred], sd), 2)
+)
+print(rango_df)
+```
+
+```{r correlacion_pred}
+cor_mat <- cor(train_df[, vars_pred], use = "complete.obs")
+corrplot(cor_mat,
+         method = "color", type = "upper", tl.cex = 0.8,
+         addCoef.col = "black", number.cex = 0.65,
+         col  = colorRampPalette(c("#E05C5C", "white", "#5B8DB8"))(200),
+         title = "Correlación entre predictoras", mar = c(0,0,1,0))
+```
+
+```{r escalar}
+# Escalar predictoras (center + scale) usando parámetros del train
+preproc <- preProcess(train_df[, vars_pred], method = c("center", "scale"))
+
+train_scaled <- predict(preproc, train_df[, vars_pred])
+test_scaled  <- predict(preproc, test_df[,  vars_pred])
+
+train_scaled$precio_categoria <- train_df$precio_categoria
+test_scaled$precio_categoria  <- test_df$precio_categoria
+
+train_scaled$price <- train_df$price
+test_scaled$price  <- test_df$price
+
+cat("Escala tras normalización (train) — media ~0, sd ~1:\n")
+round(sapply(train_scaled[, vars_pred], mean), 3)
+round(sapply(train_scaled[, vars_pred], sd),   3)
+```
+
+---
+
+## Modelos de Clasificación SVM
+
+Se generan cuatro modelos con kernels distintos para clasificar la variable
+`precio_categoria` (Económica / Intermedia / Cara).
+
+### Modelo 1 — Kernel Lineal
+
+```{r svm_lineal}
+set.seed(42)
+t0_lin <- proc.time()
+
+svm_lineal <- svm(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data   = train_scaled,
+  kernel = "linear",
+  cost   = 1,
+  scale  = FALSE   # ya está escalado
+)
+
+t_lin <- (proc.time() - t0_lin)["elapsed"]
+cat("Tiempo de entrenamiento (lineal):", round(t_lin, 2), "s\n")
+summary(svm_lineal)
+```
+
+```{r pred_lineal}
+pred_lin_train <- predict(svm_lineal, train_scaled)
+pred_lin_test  <- predict(svm_lineal, test_scaled)
+
+cm_lin_train <- confusionMatrix(pred_lin_train, train_scaled$precio_categoria)
+cm_lin_test  <- confusionMatrix(pred_lin_test,  test_scaled$precio_categoria)
+
+cat("=== Lineal — Train ===\n"); print(cm_lin_train)
+cat("\n=== Lineal — Test ===\n"); print(cm_lin_test)
+```
+
+### Modelo 2 — Kernel Radial (RBF) — parámetros por defecto
+
+```{r svm_rbf_default}
+set.seed(42)
+t0_rbf1 <- proc.time()
+
+svm_rbf1 <- svm(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data   = train_scaled,
+  kernel = "radial",
+  cost   = 1,
+  gamma  = 1 / length(vars_pred),   # heurístico: 1/p
+  scale  = FALSE
+)
+
+t_rbf1 <- (proc.time() - t0_rbf1)["elapsed"]
+cat("Tiempo de entrenamiento (RBF default):", round(t_rbf1, 2), "s\n")
+summary(svm_rbf1)
+```
+
+```{r pred_rbf1}
+pred_rbf1_train <- predict(svm_rbf1, train_scaled)
+pred_rbf1_test  <- predict(svm_rbf1, test_scaled)
+
+cm_rbf1_train <- confusionMatrix(pred_rbf1_train, train_scaled$precio_categoria)
+cm_rbf1_test  <- confusionMatrix(pred_rbf1_test,  test_scaled$precio_categoria)
+
+cat("=== RBF default — Train ===\n"); print(cm_rbf1_train)
+cat("\n=== RBF default — Test ===\n"); print(cm_rbf1_test)
+```
