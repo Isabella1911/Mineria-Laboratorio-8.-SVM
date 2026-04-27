@@ -203,3 +203,114 @@ cm_rbf1_test  <- confusionMatrix(pred_rbf1_test,  test_scaled$precio_categoria)
 cat("=== RBF default — Train ===\n"); print(cm_rbf1_train)
 cat("\n=== RBF default — Test ===\n"); print(cm_rbf1_test)
 ```
+
+### Modelo 3 — Kernel Radial con C alto
+
+```{r svm_rbf_c10}
+set.seed(42)
+t0_rbf2 <- proc.time()
+
+svm_rbf2 <- svm(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data   = train_scaled,
+  kernel = "radial",
+  cost   = 10,
+  gamma  = 0.05,
+  scale  = FALSE
+)
+
+t_rbf2 <- (proc.time() - t0_rbf2)["elapsed"]
+cat("Tiempo de entrenamiento (RBF C=10):", round(t_rbf2, 2), "s\n")
+summary(svm_rbf2)
+```
+
+```{r pred_rbf2}
+pred_rbf2_train <- predict(svm_rbf2, train_scaled)
+pred_rbf2_test  <- predict(svm_rbf2, test_scaled)
+
+cm_rbf2_train <- confusionMatrix(pred_rbf2_train, train_scaled$precio_categoria)
+cm_rbf2_test  <- confusionMatrix(pred_rbf2_test,  test_scaled$precio_categoria)
+
+cat("=== RBF C=10 — Train ===\n"); print(cm_rbf2_train)
+cat("\n=== RBF C=10 — Test ===\n"); print(cm_rbf2_test)
+```
+
+### Modelo 4 — Kernel Polinomial
+
+```{r svm_poly}
+set.seed(42)
+t0_poly <- proc.time()
+
+svm_poly <- svm(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data   = train_scaled,
+  kernel = "polynomial",
+  cost   = 1,
+  degree = 3,
+  gamma  = 0.1,
+  coef0  = 1,
+  scale  = FALSE
+)
+
+t_poly <- (proc.time() - t0_poly)["elapsed"]
+cat("Tiempo de entrenamiento (polinomial):", round(t_poly, 2), "s\n")
+summary(svm_poly)
+```
+
+```{r pred_poly}
+pred_poly_train <- predict(svm_poly, train_scaled)
+pred_poly_test  <- predict(svm_poly, test_scaled)
+
+cm_poly_train <- confusionMatrix(pred_poly_train, train_scaled$precio_categoria)
+cm_poly_test  <- confusionMatrix(pred_poly_test,  test_scaled$precio_categoria)
+
+cat("=== Polinomial — Train ===\n"); print(cm_poly_train)
+cat("\n=== Polinomial — Test ===\n"); print(cm_poly_test)
+```
+
+### Modelo 5 — Tuneo automático (RBF con tune())
+
+```{r svm_tune, cache=TRUE}
+set.seed(42)
+t0_tune <- proc.time()
+
+tune_result <- tune(
+  svm,
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data        = train_scaled,
+  kernel      = "radial",
+  scale       = FALSE,
+  ranges      = list(
+    cost  = c(0.1, 1, 5, 10),
+    gamma = c(0.01, 0.05, 0.1, 0.5)
+  ),
+  tunecontrol = tune.control(cross = 5)
+)
+
+t_tune <- (proc.time() - t0_tune)["elapsed"]
+cat("Tiempo de tuning:", round(t_tune, 2), "s\n")
+cat("Mejor combinación encontrada:\n")
+print(tune_result$best.parameters)
+plot(tune_result, main = "Error de validación cruzada — tuning SVM RBF")
+```
+
+```{r svm_tuned}
+svm_tuned <- tune_result$best.model
+
+pred_tuned_train <- predict(svm_tuned, train_scaled)
+pred_tuned_test  <- predict(svm_tuned, test_scaled)
+
+cm_tuned_train <- confusionMatrix(pred_tuned_train, train_scaled$precio_categoria)
+cm_tuned_test  <- confusionMatrix(pred_tuned_test,  test_scaled$precio_categoria)
+
+cat("=== RBF Tuneado — Train ===\n"); print(cm_tuned_train)
+cat("\n=== RBF Tuneado — Test ===\n"); print(cm_tuned_test)
+```
+
+---
