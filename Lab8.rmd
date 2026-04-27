@@ -877,3 +877,226 @@ cat("=== Tabla de sobreajuste — clasificación ===\n")
 print(tabla_comp_clas[, c("Modelo", "Acc_Train", "Acc_Test",
                            "Delta_Acc", "Sobreajuste")])
 ```
+
+```{r grafico_sobreajuste}
+# Gráfico train vs test por modelo
+comp_long <- pivot_longer(
+  tabla_comp_clas,
+  cols      = c("Acc_Train", "Acc_Test"),
+  names_to  = "Conjunto",
+  values_to = "Accuracy"
+)
+
+ggplot(comp_long, aes(x = Modelo, y = Accuracy, fill = Conjunto)) +
+  geom_col(position = "dodge", width = 0.65) +
+  geom_text(aes(label = round(Accuracy, 3)),
+            position = position_dodge(width = 0.65),
+            vjust = -0.4, size = 3, fontface = "bold") +
+  scale_fill_manual(values = c("Acc_Train" = "#5B8DB8",
+                                "Acc_Test"  = "#E8A838")) +
+  ylim(0, 1.1) +
+  labs(title = "Train vs Test Accuracy — análisis de sobreajuste (todos los modelos)",
+       x = NULL, y = "Accuracy", fill = "Conjunto") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+```{r delta_sobreajuste_plot}
+ggplot(tabla_comp_clas, aes(x = reorder(Modelo, Delta_Acc),
+                             y = Delta_Acc, fill = Sobreajuste)) +
+  geom_col(width = 0.55) +
+  geom_hline(yintercept = 0.05, color = "#E8A838", linetype = "dashed", linewidth = 1) +
+  geom_hline(yintercept = 0.10, color = "#E05C5C", linetype = "dashed", linewidth = 1) +
+  geom_text(aes(label = round(Delta_Acc, 4)),
+            hjust = -0.2, size = 3.5, fontface = "bold") +
+  scale_fill_manual(values = c("Alto"      = "#E05C5C",
+                                "Moderado"  = "#E8A838",
+                                "Bajo/Nulo" = "#6DBF8E")) +
+  coord_flip() +
+  ylim(0, max(tabla_comp_clas$Delta_Acc) * 1.3) +
+  labs(title   = "Delta Accuracy (Train − Test) — indicador de sobreajuste",
+       subtitle = "Líneas: umbral moderado (0.05) y alto (0.10)",
+       x = NULL, y = "Acc_Train − Acc_Test") +
+  theme_minimal(base_size = 11)
+```
+
+---
+
+## SVR vs modelos de regresión anteriores
+
+Se reconstruyen los modelos de regresión previos con el mismo conjunto de
+datos para comparar en condiciones idénticas.
+
+```{r reconstruir_modelos_regresion}
+# ── Regresión lineal múltiple (Lab 3) ─────────────────────────────────────────
+set.seed(42)
+t0_lm <- proc.time()
+modelo_lm <- lm(
+  price ~ accommodates + bedrooms + bathrooms + beds +
+          minimum_nights + number_of_reviews +
+          review_scores_rating + availability_365,
+  data = train_df
+)
+t_lm <- (proc.time() - t0_lm)["elapsed"]
+
+pred_lm_tr <- predict(modelo_lm, train_df)
+pred_lm_te <- predict(modelo_lm, test_df)
+
+rmse_lm_tr <- sqrt(mean((train_df$price - pred_lm_tr)^2))
+rmse_lm_te <- sqrt(mean((test_df$price  - pred_lm_te)^2))
+mae_lm_tr  <- mean(abs(train_df$price - pred_lm_tr))
+mae_lm_te  <- mean(abs(test_df$price  - pred_lm_te))
+r2_lm_tr   <- cor(train_df$price, pred_lm_tr)^2
+r2_lm_te   <- cor(test_df$price,  pred_lm_te)^2
+
+# ── Árbol de regresión (Lab 4) ────────────────────────────────────────────────
+set.seed(42)
+t0_arbol_r <- proc.time()
+arbol_reg <- rpart(
+  price ~ accommodates + bedrooms + bathrooms + beds +
+          minimum_nights + number_of_reviews +
+          review_scores_rating + availability_365,
+  data    = train_df,
+  method  = "anova",
+  control = rpart.control(cp = 0.001)
+)
+t_arbol_r <- (proc.time() - t0_arbol_r)["elapsed"]
+
+pred_arbol_tr <- predict(arbol_reg, train_df)
+pred_arbol_te <- predict(arbol_reg, test_df)
+
+rmse_arbol_tr <- sqrt(mean((train_df$price - pred_arbol_tr)^2))
+rmse_arbol_te <- sqrt(mean((test_df$price  - pred_arbol_te)^2))
+mae_arbol_tr  <- mean(abs(train_df$price - pred_arbol_tr))
+mae_arbol_te  <- mean(abs(test_df$price  - pred_arbol_te))
+r2_arbol_tr   <- cor(train_df$price, pred_arbol_tr)^2
+r2_arbol_te   <- cor(test_df$price,  pred_arbol_te)^2
+
+# ── Naive Bayes regresión (Lab 5) — usando modelo ya entrenado ────────────────
+# Se asume rmse_nb_reg, mae_nb_reg, r2_nb_reg disponibles del Lab5/6
+# Si no están disponibles, se usan valores reportados
+rmse_nb_tr <- NA; mae_nb_tr <- NA; r2_nb_tr <- NA   # NB no reportó train
+rmse_nb_te <- if (exists("rmse_nb_reg")) rmse_nb_reg else NA
+mae_nb_te  <- if (exists("mae_nb_reg"))  mae_nb_reg  else NA
+r2_nb_te   <- if (exists("r2_nb_reg"))   r2_nb_reg   else NA
+t_nb_r     <- if (exists("t_nb"))        t_nb        else NA
+
+# ── KNN regresión (Lab 6) ─────────────────────────────────────────────────────
+set.seed(42)
+t0_knn_r <- proc.time()
+knn_reg <- train(
+  price ~ accommodates + bedrooms + bathrooms + beds +
+          minimum_nights + number_of_reviews +
+          review_scores_rating + availability_365,
+  data       = train_scaled,
+  method     = "knn",
+  preProcess = NULL,
+  tuneGrid   = expand.grid(k = 15)
+)
+t_knn_r <- (proc.time() - t0_knn_r)["elapsed"]
+
+pred_knn_r_tr <- predict(knn_reg, train_scaled)
+pred_knn_r_te <- predict(knn_reg, test_scaled)
+
+rmse_knn_tr <- sqrt(mean((train_scaled$price - pred_knn_r_tr)^2))
+rmse_knn_te <- sqrt(mean((test_scaled$price  - pred_knn_r_te)^2))
+mae_knn_tr  <- mean(abs(train_scaled$price - pred_knn_r_tr))
+mae_knn_te  <- mean(abs(test_scaled$price  - pred_knn_r_te))
+r2_knn_tr   <- cor(train_scaled$price, pred_knn_r_tr)^2
+r2_knn_te   <- cor(test_scaled$price,  pred_knn_r_te)^2
+
+cat("Modelos de regresión reconstruidos.\n")
+```
+
+```{r tabla_comparacion_regresion}
+tabla_comp_reg <- data.frame(
+  Modelo      = c("Reg. Lineal", "Árbol de Regresión",
+                  "NB (bins)", "KNN (k=15)",
+                  "SVR Tuneado"),
+  RMSE_Train  = round(c(rmse_lm_tr, rmse_arbol_tr,
+                         rmse_nb_tr, rmse_knn_tr,
+                         rmse_svrt_tr), 2),
+  RMSE_Test   = round(c(rmse_lm_te, rmse_arbol_te,
+                         rmse_nb_te, rmse_knn_te,
+                         rmse_svrt_te), 2),
+  MAE_Test    = round(c(mae_lm_te,  mae_arbol_te,
+                         mae_nb_te,  mae_knn_te,
+                         mae_svrt_te), 2),
+  R2_Test     = round(c(r2_lm_te,   r2_arbol_te,
+                         r2_nb_te,   r2_knn_te,
+                         r2_svrt_te), 4),
+  Delta_RMSE  = round(c(rmse_lm_te  - rmse_lm_tr,
+                         rmse_arbol_te - rmse_arbol_tr,
+                         NA,
+                         rmse_knn_te - rmse_knn_tr,
+                         rmse_svrt_te - rmse_svrt_tr), 2),
+  Tiempo_seg  = round(c(t_lm, t_arbol_r, t_nb_r, t_knn_r, t_svrtune), 2)
+)
+
+cat("=== Comparación modelos de regresión ===\n")
+print(tabla_comp_reg)
+
+mejor_reg <- tabla_comp_reg$Modelo[which.min(tabla_comp_reg$RMSE_Test)]
+cat("\nMejor modelo (menor RMSE_Test):", mejor_reg, "\n")
+```
+
+```{r graficos_regresion}
+colores_reg <- c("#5B8DB8", "#6DBF8E", "#E8A838", "#9B59B6", "#E05C5C")
+
+# RMSE test
+par(mar = c(8, 5, 4, 2))
+bp_r1 <- barplot(
+  tabla_comp_reg$RMSE_Test,
+  names.arg = tabla_comp_reg$Modelo,
+  col       = colores_reg,
+  border    = "white",
+  ylim      = c(0, max(tabla_comp_reg$RMSE_Test, na.rm = TRUE) * 1.25),
+  main      = "RMSE en test — comparación modelos de regresión",
+  ylab      = "RMSE (USD)", las = 2, cex.names = 0.75
+)
+text(bp_r1, tabla_comp_reg$RMSE_Test + 1,
+     labels = round(tabla_comp_reg$RMSE_Test, 1),
+     cex = 0.85, font = 2)
+
+# R² test
+bp_r2 <- barplot(
+  tabla_comp_reg$R2_Test,
+  names.arg = tabla_comp_reg$Modelo,
+  col       = colores_reg,
+  border    = "white",
+  ylim      = c(0, 1),
+  main      = "R² en test — comparación modelos de regresión",
+  ylab      = "R²", las = 2, cex.names = 0.75
+)
+text(bp_r2, tabla_comp_reg$R2_Test + 0.02,
+     labels = round(tabla_comp_reg$R2_Test, 3),
+     cex = 0.85, font = 2)
+abline(h = 0.5, col = "gray40", lwd = 1, lty = 2)
+```
+
+```{r predicho_vs_real_svr}
+# Predicho vs real del mejor SVR para inspección visual
+plot(test_scaled$price, pred_svrt_test,
+     pch  = 16, col = rgb(0.36, 0.54, 0.72, 0.2),
+     main = "Predicho vs Real — SVR Tuneado (test)",
+     xlab = "Precio real (USD)", ylab = "Precio predicho (USD)",
+     xlim = c(0, 800), ylim = c(0, 800))
+abline(0, 1, col = "#E05C5C", lwd = 2, lty = 2)
+legend("topleft",
+       legend = paste0("R² = ", round(r2_svrt_te, 4),
+                       "\nRMSE = ", round(rmse_svrt_te, 2)),
+       col = "#E05C5C", lty = 2, lwd = 2, bty = "n")
+```
+
+```{r sobreajuste_regresion}
+# Delta RMSE como indicador de sobreajuste en regresión
+tabla_comp_reg$Sobreajuste <- ifelse(
+  is.na(tabla_comp_reg$Delta_RMSE), "N/D",
+  ifelse(tabla_comp_reg$Delta_RMSE > 20, "Alto",
+  ifelse(tabla_comp_reg$Delta_RMSE > 8,  "Moderado", "Bajo/Nulo"))
+)
+
+cat("=== Sobreajuste en regresión (Delta RMSE = RMSE_test − RMSE_train) ===\n")
+print(tabla_comp_reg[, c("Modelo", "RMSE_Train", "RMSE_Test",
+                          "Delta_RMSE", "Sobreajuste")])
+```
