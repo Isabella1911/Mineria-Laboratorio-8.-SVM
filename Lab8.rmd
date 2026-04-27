@@ -623,3 +623,257 @@ ggplot(metricas_all_svm, aes(x = Modelo, y = F1, fill = Clase)) +
   theme_minimal(base_size = 11) +
   theme(axis.text.x = element_text(angle = 30, hjust = 1))
 ```
+
+``{r tabla_errores_svm}
+# Tabla de errores por clase por modelo (dónde se equivoca más/menos)
+errores_clase <- function(cm, nombre) {
+  tbl <- cm$table  # filas = predicho, columnas = real en caret
+  # Transponer para que filas = real
+  tbl_t <- t(tbl)
+  clases <- rownames(tbl_t)
+  data.frame(
+    Modelo    = nombre,
+    Clase     = clases,
+    Correctos = diag(tbl_t),
+    Errores   = rowSums(tbl_t) - diag(tbl_t),
+    Total     = rowSums(tbl_t),
+    TasaError = round((rowSums(tbl_t) - diag(tbl_t)) / rowSums(tbl_t), 4)
+  )
+}
+
+err_df <- rbind(
+  errores_clase(cm_lin_test,   "Lineal (C=1)"),
+  errores_clase(cm_rbf1_test,  "RBF (C=1, γ=1/p)"),
+  errores_clase(cm_rbf2_test,  "RBF (C=10, γ=0.05)"),
+  errores_clase(cm_poly_test,  "Polinomial (d=3)"),
+  errores_clase(cm_tuned_test, "RBF Tuneado")
+)
+
+cat("=== Tasa de error por clase y modelo ===\n")
+print(err_df)
+```
+
+```{r heatmap_errores}
+ggplot(err_df, aes(x = Modelo, y = Clase, fill = TasaError)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = scales::percent(TasaError, accuracy = 0.1)),
+            size = 3.5, fontface = "bold") +
+  scale_fill_gradient(low = "#EAF4FB", high = "#E05C5C",
+                      labels = scales::percent) +
+  labs(title = "Tasa de error por clase y modelo SVM",
+       x = NULL, y = "Clase real", fill = "Tasa\nde error") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+```{r tabla_tiempo_svm}
+# Tabla consolidada: accuracy, macro F1 y tiempo
+cat("=== Tabla comparativa consolidada — modelos SVM ===\n")
+print(tabla_svm)
+
+# Gráfico de tiempo de procesamiento
+par(mar = c(9, 5, 4, 2))
+bp_t <- barplot(
+  tabla_svm$Tiempo_seg,
+  names.arg = tabla_svm$Modelo,
+  col       = c("#5B8DB8", "#6DBF8E", "#E8A838", "#E05C5C", "#9B59B6"),
+  border    = "white",
+  main      = "Tiempo de entrenamiento — modelos SVM",
+  ylab      = "Segundos",
+  las       = 2,
+  cex.names = 0.72
+)
+text(bp_t, tabla_svm$Tiempo_seg + 0.5,
+     labels = round(tabla_svm$Tiempo_seg, 1),
+     cex = 0.85, font = 2)
+```
+
+---
+
+## SVM vs modelos de clasificación anteriores
+
+Se compara el mejor modelo SVM (tuneado) con los algoritmos de labs previos
+usando **exactamente el mismo test set** (`set.seed(42)`, split 70/30).
+
+```{r reconstruir_modelos_anteriores}
+# ── Variables predictoras comunes ────────────────────────────────────────────
+vars_pred_clas <- c("accommodates", "bedrooms", "bathrooms", "beds",
+                    "minimum_nights", "number_of_reviews",
+                    "review_scores_rating", "availability_365")
+
+# ── Árbol de decisión (Lab 4) ─────────────────────────────────────────────────
+set.seed(42)
+t0_arbol <- proc.time()
+arbol_clas <- rpart(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data    = train_df,
+  method  = "class",
+  control = rpart.control(cp = 0.001)
+)
+t_arbol <- (proc.time() - t0_arbol)["elapsed"]
+
+pred_arbol_train <- predict(arbol_clas, train_df, type = "class")
+pred_arbol_test  <- predict(arbol_clas, test_df,  type = "class")
+
+cm_arbol_train <- confusionMatrix(pred_arbol_train, train_df$precio_categoria)
+cm_arbol_test  <- confusionMatrix(pred_arbol_test,  test_df$precio_categoria)
+
+# ── Naive Bayes (Lab 5) ───────────────────────────────────────────────────────
+set.seed(42)
+t0_nb <- proc.time()
+nb_clas <- naiveBayes(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data = train_df
+)
+t_nb <- (proc.time() - t0_nb)["elapsed"]
+
+pred_nb_train <- predict(nb_clas, train_df)
+pred_nb_test  <- predict(nb_clas, test_df)
+
+cm_nb_train <- confusionMatrix(pred_nb_train, train_df$precio_categoria)
+cm_nb_test  <- confusionMatrix(pred_nb_test,  test_df$precio_categoria)
+
+# ── KNN (Lab 6) — k=15 sobre datos escalados ─────────────────────────────────
+set.seed(42)
+t0_knn <- proc.time()
+knn_clas <- train(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data       = train_scaled,
+  method     = "knn",
+  preProcess = NULL,        # ya escalado
+  tuneGrid   = expand.grid(k = 15)
+)
+t_knn <- (proc.time() - t0_knn)["elapsed"]
+
+pred_knn_train <- predict(knn_clas, train_scaled)
+pred_knn_test  <- predict(knn_clas, test_scaled)
+
+cm_knn_train <- confusionMatrix(pred_knn_train, train_scaled$precio_categoria)
+cm_knn_test  <- confusionMatrix(pred_knn_test,  test_scaled$precio_categoria)
+
+# ── Regresión Logística Multinomial (Lab 7) ───────────────────────────────────
+library(nnet)
+set.seed(42)
+t0_log <- proc.time()
+logit_multi <- multinom(
+  precio_categoria ~ accommodates + bedrooms + bathrooms + beds +
+                     minimum_nights + number_of_reviews +
+                     review_scores_rating + availability_365,
+  data  = train_df,
+  decay = 0.01,
+  trace = FALSE
+)
+t_log <- (proc.time() - t0_log)["elapsed"]
+
+pred_log_train <- predict(logit_multi, train_df)
+pred_log_test  <- predict(logit_multi, test_df)
+
+cm_log_train <- confusionMatrix(pred_log_train, train_df$precio_categoria)
+cm_log_test  <- confusionMatrix(pred_log_test,  test_df$precio_categoria)
+
+cat("Modelos anteriores reconstruidos.\n")
+```
+
+```{r tabla_comparacion_todos}
+# Función: extrae accuracy y macro F1 de un confusionMatrix
+resumen_cm <- function(cm_tr, cm_te, nombre, tiempo_s) {
+  data.frame(
+    Modelo        = nombre,
+    Acc_Train     = round(cm_tr$overall["Accuracy"], 4),
+    Acc_Test      = round(cm_te$overall["Accuracy"], 4),
+    Delta_Acc     = round(cm_tr$overall["Accuracy"] -
+                          cm_te$overall["Accuracy"], 4),
+    MacroF1_Test  = round(mean(cm_te$byClass[, "F1"], na.rm = TRUE), 4),
+    Kappa_Test    = round(cm_te$overall["Kappa"], 4),
+    Tiempo_seg    = round(tiempo_s, 2)
+  )
+}
+
+# Mejor modelo SVM ya entrenado en incisos 1-7
+tabla_comp_clas <- rbind(
+  resumen_cm(cm_arbol_train, cm_arbol_test, "Árbol de Decisión",    t_arbol),
+  resumen_cm(cm_nb_train,    cm_nb_test,    "Naive Bayes",           t_nb),
+  resumen_cm(cm_knn_train,   cm_knn_test,   "KNN (k=15)",            t_knn),
+  resumen_cm(cm_log_train,   cm_log_test,   "Reg. Log. Multinomial", t_log),
+  resumen_cm(cm_tuned_train, cm_tuned_test, "SVM RBF Tuneado",       t_tune)
+)
+
+cat("=== Comparación clasificación multinomial — todos los modelos ===\n")
+print(tabla_comp_clas)
+```
+
+```{r grafico_comparacion_todos}
+colores_5 <- c("#5B8DB8", "#6DBF8E", "#E8A838", "#9B59B6", "#E05C5C")
+
+# Accuracy test
+par(mar = c(8, 5, 4, 2))
+bp_c <- barplot(
+  tabla_comp_clas$Acc_Test,
+  names.arg = tabla_comp_clas$Modelo,
+  col       = colores_5,
+  border    = "white",
+  ylim      = c(0, 1),
+  main      = "Accuracy en test — comparación final de clasificación",
+  ylab      = "Accuracy", las = 2, cex.names = 0.72
+)
+text(bp_c, tabla_comp_clas$Acc_Test + 0.02,
+     labels = round(tabla_comp_clas$Acc_Test, 3),
+     cex = 0.85, font = 2)
+
+# Macro F1 test
+bp_f <- barplot(
+  tabla_comp_clas$MacroF1_Test,
+  names.arg = tabla_comp_clas$Modelo,
+  col       = colores_5,
+  border    = "white",
+  ylim      = c(0, 1),
+  main      = "Macro F1 en test — comparación final de clasificación",
+  ylab      = "Macro F1", las = 2, cex.names = 0.72
+)
+text(bp_f, tabla_comp_clas$MacroF1_Test + 0.02,
+     labels = round(tabla_comp_clas$MacroF1_Test, 3),
+     cex = 0.85, font = 2)
+
+# Tiempo de procesamiento
+bp_tt <- barplot(
+  tabla_comp_clas$Tiempo_seg,
+  names.arg = tabla_comp_clas$Modelo,
+  col       = colores_5,
+  border    = "white",
+  main      = "Tiempo de entrenamiento — comparación",
+  ylab      = "Segundos", las = 2, cex.names = 0.72
+)
+text(bp_tt, tabla_comp_clas$Tiempo_seg + 0.3,
+     labels = round(tabla_comp_clas$Tiempo_seg, 1),
+     cex = 0.85, font = 2)
+
+mejor_clas <- tabla_comp_clas$Modelo[which.max(tabla_comp_clas$Acc_Test)]
+mas_lento  <- tabla_comp_clas$Modelo[which.max(tabla_comp_clas$Tiempo_seg)]
+cat("\nMejor modelo (mayor Acc_Test):", mejor_clas, "\n")
+cat("Modelo más lento:             ", mas_lento,  "\n")
+```
+
+---
+
+## Tabla de sobreajuste — todos los modelos de clasificación
+
+Para determinar si un modelo de clasificación está sobreajustado se compara
+el accuracy (y el macro F1) entre entrenamiento y prueba. Una diferencia
+`Delta_Acc` grande (> 0.05) indica sobreajuste.
+
+```{r tabla_sobreajuste}
+tabla_comp_clas$Sobreajuste <- ifelse(
+  tabla_comp_clas$Delta_Acc > 0.10, "Alto",
+  ifelse(tabla_comp_clas$Delta_Acc > 0.05, "Moderado", "Bajo/Nulo")
+)
+
+cat("=== Tabla de sobreajuste — clasificación ===\n")
+print(tabla_comp_clas[, c("Modelo", "Acc_Train", "Acc_Test",
+                           "Delta_Acc", "Sobreajuste")])
+```
